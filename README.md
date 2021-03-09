@@ -1,2 +1,2 @@
 # Processing_P4_Zooniverse
-A test app with Processing to perform classifications with Zooniverse using the Kinect and counting people
+A test app to perform classifications with Zooniverse by counting people
