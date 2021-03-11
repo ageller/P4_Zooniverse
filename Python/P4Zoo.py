@@ -1,6 +1,9 @@
 #https://data-flair.training/blogs/python-project-real-time-human-detection-counting/
 #https://www.pyimagesearch.com/2018/02/26/face-detection-with-opencv-and-deep-learning/
 #https://realpython.com/face-detection-in-python-using-a-webcam/#the-code
+#https://towardsdatascience.com/a-guide-to-face-detection-in-python-3eab0f6b9fc1
+
+#Will need to test this with people of different skin tones
 
 import cv2
 import dlib
@@ -14,13 +17,19 @@ class peopleCounter:
 		#choose between detecting by face or by the full person.  Face seems much more stable
 		self.method = 'DLIBface' 
 
-		#will store the number of people
-		self.people = [0,0] #currently left right
 
 		#define the webcam number and the width and height (in pixels) to scale the image
 		self.camNumber = 1
 		self.width = int(640)
 		self.height = int(480)
+
+		#divisions
+		#should correspond with width; maybe I should make this a fraction?
+		self.xEdges = [0, 
+					   int(np.round(self.width/3.)), 
+					   int(np.round(2.*self.width/3.)), 
+					   self.width] 
+
 
 		#font displayed on top of the video
 		self.fontSize = 0.8
@@ -53,24 +62,32 @@ class peopleCounter:
 		#https://towardsdatascience.com/a-guide-to-face-detection-in-python-3eab0f6b9fc1
 		self.DLIBFaceDetector = dlib.get_frontal_face_detector()
 
+		#will store the number of people (initialized below in initPeople function)
+		self.people = None
 
-		#divisions
-		self.middleX = self.width/2. #should correspond with width; maybe I should make this a fraction?
+
+
+	def initPeople(self):
+		self.people = np.zeros(len(self.xEdges) - 1, dtype=int)
+
+	def countPeople(self, x):
+		#I think the easiest way is to just hist np.histogram, even though at this point there will be only 1 x value 
+		hist, bin_edges = np.histogram([x], bins = self.xEdges)
+		for i,h in enumerate(hist):
+			self.people[i] += int(h)
+
 
 	def detect(self, frame):
 		
 		img_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-		self.people = [0,0]
+		self.initPeople()
 
 		if (self.method == 'HAARface'):
 			rects = self.faceCascade.detectMultiScale(img_gray, scaleFactor=self.scaleFactor, minNeighbors=self.minNeighbors, minSize=self.minSize,flags=cv2.CASCADE_SCALE_IMAGE)
 			# Draw a rectangle around the faces
 			for (x, y, w, h) in rects:
 				cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-				if (x + w/2. < self.middleX):
-					self.people[0] += 1
-				else:
-					self.people[1] += 1
+				self.countPeople(x + w/2.)
 
 
 		elif (self.method == 'DNNface'):
@@ -83,10 +100,8 @@ class peopleCounter:
 				y2 = rect.rect.bottom()
 				# Rectangle around the face
 				cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-				if ((x1 + x2)/2. < self.middleX):
-					self.people[0] += 1
-				else:
-					self.people[1] += 1
+				self.countPeople((x1 + x2)/2.)
+
 
 		elif (self.method == 'DLIBface'):
 			rects = self.DLIBFaceDetector(img_gray, 1)
@@ -94,26 +109,14 @@ class peopleCounter:
 			for (i, rect) in enumerate(rects):
 				(x, y, w, h) = face_utils.rect_to_bb(rect)
 				cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
-				if (x +w/2 < self.middleX):
-					self.people[0] += 1
-				else:
-					self.people[1] += 1
+				self.countPeople(x + w/2.)
 
 		else: #HOGperson
-			#Note: I did not build this out to include the left vs. right detection (yet)
-
-			#rects, weights =  self.HOGCV.detectMultiScale(frame, winStride = (4, 4), padding = (8, 8), scale = 1.03)
 			
 			if (self.winStride is None):
 				rects, weights = self.HOGCV.detectMultiScale(img_gray, padding=self.padding, scale=self.scale)
 			else: 
 				rects, weights = self.HOGCV.detectMultiScale(img_gray, padding=self.padding, scale=self.scale, winStride=self.winStride)
-
-
-			# for x,y,w,h in rects:
-			# 	self.people[0] += 1
-			# 	cv2.rectangle(frame, (x,y), (x+w,y+h), (0,255,0), 2)
-			# 	cv2.putText(frame, f'person {self.people[0]}', (x,y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
 
 
 
@@ -123,7 +126,7 @@ class peopleCounter:
 					continue
 
 				if (weights[i] > self.weightLimit):
-					self.people[0] += 1
+					self.countPeople(x + w/2.)
 
 				if (weights[i] > self.weightExclude and weights[i] < 0.3):
 					color = (0,0,255)
@@ -137,16 +140,16 @@ class peopleCounter:
 			cv2.putText(frame, 'Moderate confidence', (40, 120), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize*0.8, (50, 122, 255), 2)
 			cv2.putText(frame, 'Low confidence', (40, 140), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize*0.8, (0, 0, 255), 2)
 
+		for i,n in enumerate(self.people):
+			cv2.line(frame, (self.xEdges[i+1] ,0),(self.xEdges[i+1] ,self.height),(255,255,255),4)
+			cv2.putText(frame, f'Count : {n}', (self.xEdges[i]+40,40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 2)
 
-		cv2.line(frame, (int(np.round(self.middleX)) ,0),(int(np.round(self.middleX)) ,self.height),(255,255,255),4)
-		cv2.putText(frame, f'People : {self.people[0]}', (40,40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 2)
-		cv2.putText(frame, f'People : {self.people[1]}', (int(np.round(self.middleX)) + 40,40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255,0), 2)
 		cv2.imshow('output', frame)
 
 		return frame
 
 
-	def detectByWebcam(self):   
+	def detectByWebcam(self):  
 		video = cv2.VideoCapture(self.camNumber)
 		video.set(3, self.width)
 		video.set(4, self.height)
@@ -167,5 +170,5 @@ class peopleCounter:
 
 if __name__ == "__main__":
 	# execute only if run as a script
-	test = peopleCounter()
-	test.detectByWebcam() #need to hit q to stop
+	counter = peopleCounter()
+	counter.detectByWebcam() #type q to stop
