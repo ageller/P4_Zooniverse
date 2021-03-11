@@ -5,11 +5,25 @@
 
 #Will need to test this with people of different skin tones
 
+#would be nice to have a continuous video going, and just update the numbers when they are available
+# - maybe i can run two threads, one for detect and one for display
+# - display could be at full resolution?
+
+#standard libraries
+import numpy as np
+import time
+
+#for detecting people
 import cv2
 import dlib
 from imutils import face_utils
-import numpy as np
-import argparse
+
+
+#for the button
+from PyQt5.QtWidgets import * 
+from PyQt5.QtGui import * 
+from PyQt5.QtCore import * 
+import sys 
 
 class peopleCounter:
 	def __init__(self):
@@ -66,6 +80,15 @@ class peopleCounter:
 		self.people = None
 
 
+		#timer (start is initialized below)
+		self.timerLength = 60 #seconds
+		self.start = 0
+		self.timerNow = self.timerLength 
+		self.timerRunning = False #can be toggled with the start/pause button
+
+	def initTimer(self):
+		self.start = time.time()
+		self.timerNow = self.timerLength
 
 	def initPeople(self):
 		self.people = np.zeros(len(self.xEdges) - 1, dtype=int)
@@ -144,31 +167,102 @@ class peopleCounter:
 			cv2.line(frame, (self.xEdges[i+1] ,0),(self.xEdges[i+1] ,self.height),(255,255,255),4)
 			cv2.putText(frame, f'Count : {n}', (self.xEdges[i]+40,40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 2)
 
+		cv2.putText(frame, f':{self.timerNow}', (40,self.height - 40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255, 0), 2)
 		cv2.imshow('output', frame)
 
 		return frame
 
 
-	def detectByWebcam(self):  
+	def detectByWebcam(self): 
+		# # create pyqt5 app 
+		# App = QApplication(sys.argv) 
+		  
+		# # create the instance of our Window 
+		# window = QtWindow() 
+		  
+		# # start the app 
+		# sys.exit(App.exec()) 
+
 		video = cv2.VideoCapture(self.camNumber)
 		video.set(3, self.width)
 		video.set(4, self.height)
-		print('Detecting people by camera...')
+		self.initTimer()
 		while True:
-			check, frame = video.read()
-			frame = self.detect(frame)
-			#cv2.imshow("HOG detection",frame)
+			#check for quit
 			key = cv2.waitKey(1)
 			if (key == ord('q')):
 				break
+
+
+			#check the timer
+			if (self.timerRunning):
+				self.timerNow = self.timerLength - int(np.round(time.time() - self.start))
+			if (self.timerNow < 0): #this will allow the timer to display 0 on the screen
+				#for now
+				time.sleep(3)
+
+				#update the images
+
+				#save the counts
+
+				#reset the timer
+				self.initTimer()
+
+
+			#get the frame from the webcam and detect the people
+			check, frame = video.read()
+			frame = self.detect(frame)
+
+
+
 		video.release()
 		cv2.destroyAllWindows()
 
 
-
+#https://www.geeksforgeeks.org/pyqt5-create-circular-push-button/
+#for start/pause
+class QtWindow(QMainWindow): 
+	def __init__(self): 
+		super().__init__() 
+  
+		# setting title 
+		self.setWindowTitle("") 
+  
+		# setting geometry 
+		self.setGeometry(100, 100, 600, 400) 
+  
+		# calling method 
+		self.UiComponents() 
+  
+		# showing all the widgets 
+		self.show() 
+  
+	# method for widgets 
+	def UiComponents(self): 
+  
+		# creating a push button 
+		button = QPushButton("CLICK", self) 
+  
+		# setting geometry of button 
+		button.setGeometry(200, 150, 100, 100) 
+  
+		# setting radius and border 
+		button.setStyleSheet("border-radius: 50;  border: 2px solid black") 
+  
+		# adding action to a button 
+		button.clicked.connect(self.clickme) 
+  
+	# action method 
+	def clickme(self): 
+  
+		# printing pressed 
+		print("pressed") 
+  
 
 
 if __name__ == "__main__":
 	# execute only if run as a script
 	counter = peopleCounter()
+	counter.timerLength = 10
+	counter.timerRunning = True
 	counter.detectByWebcam() #type q to stop
