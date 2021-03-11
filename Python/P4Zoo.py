@@ -25,28 +25,195 @@ from PyQt5.QtGui import *
 from PyQt5.QtCore import * 
 import sys 
 
-class peopleCounter:
-	def __init__(self):
 
-		#choose between detecting by face or by the full person.  Face seems much more stable
-		self.method = 'DLIBface' 
+ 
+#class that controls all processes and is called to start app
+#https://stackoverflow.com/questions/44404349/pyqt-showing-video-stream-from-opencv/44404713
+class main(QMainWindow):
+
+	def __init__(self):
+		super().__init__()
 
 
 		#define the webcam number and the width and height (in pixels) to scale the image
 		self.camNumber = 1
 		self.width = int(640)
-		self.height = int(480)
+		self.height = int(360)
 
 		#divisions
 		#should correspond with width; maybe I should make this a fraction?
-		self.xEdges = [0, 
-					   int(np.round(self.width/3.)), 
-					   int(np.round(2.*self.width/3.)), 
-					   self.width] 
+		self.xEdges = [0, 1/3, 2/3, 1]
+
+		self.setWindowTitle("") 
 
 
-		#font displayed on top of the video
-		self.fontSize = 0.8
+		#open the start/pause button
+		self.button = buttonWindow()
+		self.button.show()
+
+
+
+	@pyqtSlot(QImage)
+	def setImage(self, image):
+		self.label.setPixmap(QPixmap.fromImage(image))
+
+
+
+	def run(self):
+		self.setGeometry(100, 100, self.width, self.height) 
+
+		# create a label (I think this is required to show connect the webcam)
+		self.label = QLabel(self)
+		self.label.resize(self.width, self.height)
+
+		#set up the timer
+		self.timer = timer(self)
+		self.timer.init()
+		self.timer.timerRunning = True #will use the button later
+		self.timer.timerLength = 10 #seconds
+		self.timer.start()
+
+		#set up the webcam
+		self.cam = webcamCapture(self)
+		self.cam.timer = self.timer
+		self.cam.camNumber = self.camNumber
+		self.cam.width = self.width
+		self.cam.height = self.height
+		self.cam.xEdges = self.xEdges
+		self.cam.changePixmap.connect(self.setImage)
+		self.cam.init()
+		self.cam.start()
+
+		#set up the opencv2 people counter
+		self.counter = countPeople(self)
+		self.counter.camNumber = self.camNumber
+		self.counter.width = self.width
+		self.counter.height = self.height
+		self.counter.xEdges = self.xEdges
+		self.counter.cam = self.cam
+		self.counter.init()
+		self.counter.start()
+
+		#show the main window
+		self.show()
+
+	def closeEvent(self, event):
+		self.button.close()
+		event.accept()
+
+
+class timer(QThread):
+
+	def init(self):
+		#timer (start is initialized below)
+		self.timerLength = 60 #seconds
+		self.startTime = 0
+		self.timerNow = self.timerLength 
+		self.timerRunning = False #can be toggled with the start/pause button
+
+	def initTimer(self):
+		self.startTime = time.time()
+		self.timerNow = self.timerLength
+
+	def run(self):
+		self.initTimer()
+		while True:
+			#check the timer
+			if (self.timerRunning):
+				self.timerNow = self.timerLength - int(np.round(time.time() - self.startTime))
+
+
+#grab webcam image
+class webcamCapture(QThread):
+
+	changePixmap = pyqtSignal(QImage)
+	def init(self):
+		self.frame = None
+		self.people = None
+
+		#font displayed on top of the video (could define on input)
+		self.fontSize = 2
+
+
+	def run(self):
+		cap = cv2.VideoCapture(self.camNumber)
+		width  = int(cap.get(3))  
+		height = int(cap.get(4))  
+		self.edges = np.array(width*np.array(self.xEdges), dtype=int)
+
+		while True:
+
+			ret, f = cap.read()
+			self.frame = f
+			if ret:
+				#annotate video
+				#timer
+				cv2.putText(self.frame, f':{self.timer.timerNow}', (40, height - 40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255, 0), 4)
+				for i in range(len(self.edges) - 1):
+				#edge lines
+					cv2.line(self.frame, (self.edges[i+1] ,0),(self.edges[i+1] ,height),(255,255,255),8)
+					if (self.people is not None):
+						#number of people
+						cv2.putText(self.frame, f'Count : {self.people[i]}', (self.edges[i]+40,80), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 4)
+
+
+				print(self.people)
+				
+				#check the timer
+				if (self.timer.timerNow < 0): #this will allow the timer to display 0 on the screen
+					#for now
+					time.sleep(3)
+
+					#reset the timer
+					self.timer.initTimer()
+
+				# display the image	
+				# https://stackoverflow.com/a/55468544/6622587
+				rgbImage = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
+				h, w, ch = rgbImage.shape
+				bytesPerLine = ch * w
+				convertToQtFormat = QImage(rgbImage.data, w, h, bytesPerLine, QImage.Format_RGB888)
+				p = convertToQtFormat.scaled(self.width, self.height, Qt.KeepAspectRatio)
+				self.changePixmap.emit(p)
+
+
+
+		cap.release()
+		cv2.destroyAllWindows() #not sure this is still necessary
+
+
+	def addToImage(self):
+		print("foo")
+
+#testing a people counter
+class countPeople(QThread):
+
+	changePixmap = pyqtSignal(QImage)
+
+	def init(self):
+		#choose between detecting by face or by the full person.  Face seems much more stable
+		self.method = 'DLIBface' 
+
+		#define the webcam number and the width and height (in pixels) for the displayed image
+		#expecting to have these defined already
+		# self.camNumber = 1
+		# self.width = int(640)
+		# self.height = int(480)
+
+
+		#define the width and height to use in the detection algorithm (<= width and height set above)
+		self.detectWidth = int(640)
+		self.detectHeight = int(480)
+
+		# #divisions, not set in input
+		# #should correspond with width; maybe I should make this a fraction?
+		# self.xEdges = [0, 
+		# 			   int(np.round(self.width/3.)), 
+		# 			   int(np.round(2.*self.width/3.)), 
+		# 			   self.width] 
+
+		self.edges = np.array(self.width*np.array(self.xEdges), dtype=int)
+
 
 		#HOGperson method  -- not accurate enough
 		#see here for description of options https://www.pyimagesearch.com/2015/11/16/hog-detectmultiscale-parameters-explained/
@@ -79,190 +246,128 @@ class peopleCounter:
 		#will store the number of people (initialized below in initPeople function)
 		self.people = None
 
-
-		#timer (start is initialized below)
-		self.timerLength = 60 #seconds
-		self.start = 0
-		self.timerNow = self.timerLength 
-		self.timerRunning = False #can be toggled with the start/pause button
-
-	def initTimer(self):
-		self.start = time.time()
-		self.timerNow = self.timerLength
+		#will store the rects for the faces
+		self.faceRects = None
 
 	def initPeople(self):
 		self.people = np.zeros(len(self.xEdges) - 1, dtype=int)
 
 	def countPeople(self, x):
 		#I think the easiest way is to just hist np.histogram, even though at this point there will be only 1 x value 
-		hist, bin_edges = np.histogram([x], bins = self.xEdges)
+		hist, bin_edges = np.histogram([x], bins = self.edges)
 		for i,h in enumerate(hist):
 			self.people[i] += int(h)
 
 
-	def detect(self, frame):
+	def detect(self):
 		
-		img_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-		self.initPeople()
+		try:
+			frameResized = cv2.resize(self.cam.frame, (self.detectWidth, self.detectHeight))
+			img_gray = cv2.cvtColor(frameResized, cv2.COLOR_BGR2GRAY)
+			self.initPeople()
 
-		if (self.method == 'HAARface'):
-			rects = self.faceCascade.detectMultiScale(img_gray, scaleFactor=self.scaleFactor, minNeighbors=self.minNeighbors, minSize=self.minSize,flags=cv2.CASCADE_SCALE_IMAGE)
-			# Draw a rectangle around the faces
-			for (x, y, w, h) in rects:
-				cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-				self.countPeople(x + w/2.)
+			if (self.method == 'HAARface'):
+				rects = self.faceCascade.detectMultiScale(img_gray, scaleFactor=self.scaleFactor, minNeighbors=self.minNeighbors, minSize=self.minSize,flags=cv2.CASCADE_SCALE_IMAGE)
+				self.faceRects = np.array(rects)
 
+			elif (self.method == 'DNNface'):
+				rects = self.dnnFaceDetector(img_gray, 1)
+				rs = []
+				for (i, rect) in enumerate(rects):
+					x1 = rect.rect.left()
+					y1 = rect.rect.top()
+					x2 = rect.rect.right()
+					y2 = rect.rect.bottom()
+					r = [x1, y1, x2 - x1, y2 - y1]
+					rs.append(r)
+				self.faceRects = np.array(rs)
 
-		elif (self.method == 'DNNface'):
-			rects = self.dnnFaceDetector(img_gray, 1)
+			elif (self.method == 'DLIBface'):
+				rects = self.DLIBFaceDetector(img_gray, 1)
+				rs = []
+				for (i, rect) in enumerate(rects):
+					(x, y, w, h) = face_utils.rect_to_bb(rect)
+					rs.append([x,y,w,h])
+				self.faceRects = np.array(rs)
 
-			for (i, rect) in enumerate(rects):
-				x1 = rect.rect.left()
-				y1 = rect.rect.top()
-				x2 = rect.rect.right()
-				y2 = rect.rect.bottom()
-				# Rectangle around the face
-				cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-				self.countPeople((x1 + x2)/2.)
+			else: #HOGperson
+				
+				if (self.winStride is None):
+					rects, weights = self.HOGCV.detectMultiScale(img_gray, padding=self.padding, scale=self.scale)
+				else: 
+					rects, weights = self.HOGCV.detectMultiScale(img_gray, padding=self.padding, scale=self.scale, winStride=self.winStride)
 
+				rs = []
+				for i, (x, y, w, h) in enumerate(rects):
 
-		elif (self.method == 'DLIBface'):
-			rects = self.DLIBFaceDetector(img_gray, 1)
-
-			for (i, rect) in enumerate(rects):
-				(x, y, w, h) = face_utils.rect_to_bb(rect)
-				cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
-				self.countPeople(x + w/2.)
-
-		else: #HOGperson
-			
-			if (self.winStride is None):
-				rects, weights = self.HOGCV.detectMultiScale(img_gray, padding=self.padding, scale=self.scale)
-			else: 
-				rects, weights = self.HOGCV.detectMultiScale(img_gray, padding=self.padding, scale=self.scale, winStride=self.winStride)
-
-
-
-			for i, (x, y, w, h) in enumerate(rects):
-
-				if (weights[i] < self.weightExclude):
-					continue
-
-				if (weights[i] > self.weightLimit):
-					self.countPeople(x + w/2.)
-
-				if (weights[i] > self.weightExclude and weights[i] < 0.3):
-					color = (0,0,255)
-				if (weights[i] > 0.3 and weights[i] < 0.7):
-					color = (50, 122, 255)
-				if (weights[i] > 0.7):
-					color = (0, 255, 0)
-				cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
-				cv2.putText(frame, f'person {self.people[0]}', (x,y-5), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize*0.5, color, 1)
-			cv2.putText(frame, 'High confidence', (40, 100), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize*0.8, (0, 255, 0), 2)
-			cv2.putText(frame, 'Moderate confidence', (40, 120), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize*0.8, (50, 122, 255), 2)
-			cv2.putText(frame, 'Low confidence', (40, 140), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize*0.8, (0, 0, 255), 2)
-
-		for i,n in enumerate(self.people):
-			cv2.line(frame, (self.xEdges[i+1] ,0),(self.xEdges[i+1] ,self.height),(255,255,255),4)
-			cv2.putText(frame, f'Count : {n}', (self.xEdges[i]+40,40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 2)
-
-		cv2.putText(frame, f':{self.timerNow}', (40,self.height - 40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255, 0), 2)
-		cv2.imshow('output', frame)
-
-		return frame
+					if (weights[i] > self.weightLimit):
+						rs.append([x,y,w,h])
+				self.faceRects = np.array(rs)
 
 
-	def detectByWebcam(self): 
-		# # create pyqt5 app 
-		# App = QApplication(sys.argv) 
-		  
-		# # create the instance of our Window 
-		# window = QtWindow() 
-		  
-		# # start the app 
-		# sys.exit(App.exec()) 
+			self.countPeople(self.faceRects[:,0] + self.faceRects[:,2]/2.) #x + w/2.
 
-		video = cv2.VideoCapture(self.camNumber)
-		video.set(3, self.width)
-		video.set(4, self.height)
-		self.initTimer()
+			# for i,n in enumerate(self.people):
+			# 	cv2.line(frame, (self.xEdges[i+1] ,0),(self.xEdges[i+1] ,self.height),(255,255,255),4)
+			# 	cv2.putText(frame, f'Count : {n}', (self.xEdges[i]+40,40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 2)
+
+			# cv2.putText(frame, f':{self.timerNow}', (40,self.height - 40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255, 0), 2)
+			# cv2.imshow('output', frame)
+
+			self.cam.people = self.people
+
+		except:
+			#print('exception occurred')
+			pass
+
+
+
+
+	def run(self): 
+
 		while True:
-			#check for quit
-			key = cv2.waitKey(1)
-			if (key == ord('q')):
-				break
+
+			#detect people
+			self.detect()
 
 
-			#check the timer
-			if (self.timerRunning):
-				self.timerNow = self.timerLength - int(np.round(time.time() - self.start))
-			if (self.timerNow < 0): #this will allow the timer to display 0 on the screen
-				#for now
-				time.sleep(3)
-
-				#update the images
-
-				#save the counts
-
-				#reset the timer
-				self.initTimer()
-
-
-			#get the frame from the webcam and detect the people
-			check, frame = video.read()
-			frame = self.detect(frame)
-
-
-
-		video.release()
-		cv2.destroyAllWindows()
 
 
 #https://www.geeksforgeeks.org/pyqt5-create-circular-push-button/
-#for start/pause
-class QtWindow(QMainWindow): 
+#start/pause button
+class buttonWindow(QWidget): 
 	def __init__(self): 
 		super().__init__() 
-  
-		# setting title 
-		self.setWindowTitle("") 
-  
-		# setting geometry 
-		self.setGeometry(100, 100, 600, 400) 
-  
-		# calling method 
+
+		self.setGeometry(100, 700, 140, 140) 
+		self.setWindowFlag(Qt.FramelessWindowHint) 
 		self.UiComponents() 
-  
-		# showing all the widgets 
 		self.show() 
-  
-	# method for widgets 
+
+	# method for creating widgets 
 	def UiComponents(self): 
-  
+
 		# creating a push button 
 		button = QPushButton("CLICK", self) 
-  
-		# setting geometry of button 
-		button.setGeometry(200, 150, 100, 100) 
-  
-		# setting radius and border 
+		button.setGeometry(20, 20, 100, 100) 
 		button.setStyleSheet("border-radius: 50;  border: 2px solid black") 
-  
-		# adding action to a button 
 		button.clicked.connect(self.clickme) 
-  
+
 	# action method 
 	def clickme(self): 
-  
-		# printing pressed 
-		print("pressed") 
-  
-
+		print("pressed")
 
 if __name__ == "__main__":
+
+
 	# execute only if run as a script
-	counter = peopleCounter()
-	counter.timerLength = 10
-	counter.timerRunning = True
-	counter.detectByWebcam() #type q to stop
+	# counter = peopleCounter()
+	# counter.timerLength = 10
+	# counter.timerRunning = True
+	# counter.detectByWebcam() #type q to stop
+
+	# create pyqt5 app 
+	app = QApplication(sys.argv) 
+	w = main()
+	w.run()
+	sys.exit(app.exec_())
