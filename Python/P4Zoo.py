@@ -21,7 +21,8 @@ sharedDict['frameDetect'] = None
 sharedDict['people'] = None
 sharedDict['faceRects'] = None
 sharedDict['timerNow'] = 0
-sharedDict['timerRunning'] = False
+sharedDict['timerRunning'] = False #will control start/pause
+sharedDict['timerFinished'] = False #flag for when timer runs down to zoer
 
 #for detecting people and displaying images/buttons
 import cv2
@@ -70,6 +71,7 @@ class mainController():
 		self.timerProcess = None
 
 		#parameters for timer
+		self.timer = None # will contain the timer object
 		self.timerLength = 60
 		self.timerImagePath = os.path.join('images','circle.png')
 		self.timerWidth = int(200)
@@ -82,14 +84,19 @@ class mainController():
 	def onClick(self, event, x, y, flags, param): 
 		if (event == cv2.EVENT_LBUTTONDOWN or event == cv2.EVENT_RBUTTONDOWN): 
 			sharedDict['timerRunning'] = not sharedDict['timerRunning']
-			print('button clicked', sharedDict['timerRunning'])
 			if (sharedDict['timerRunning']):
-				text = 'Pause'
-			else:
-				text = 'Start'
-			t = self.buttonImage.copy()
-			t = self.addText(t, text, self.font, self.buttonFontSize)
-			cv2.imshow('startButton',t)
+				sharedDict['timerFinished'] = False
+			print('button clicked', sharedDict['timerRunning'])
+			self.toggleButton()
+
+	def toggleButton(self):
+		if (sharedDict['timerRunning']):
+			text = 'Pause'
+		else:
+			text = 'Start'
+		t = self.buttonImage.copy()
+		t = self.addText(t, text, self.font, self.buttonFontSize)
+		cv2.imshow('startButton',t)
 
 	def addText(self, img, text, font, fontSize, textX = None, textY = None, color = None):
 		#https://www.codesofinterest.com/2017/07/more-fonts-on-opencv.html
@@ -124,9 +131,9 @@ class mainController():
 		self.timerImg = cv2.resize(img, (self.timerWidth, self.timerHeight))
 		cv2.imshow('timer', self.timerImg) 
 		cv2.moveWindow('timer', self.timerX0, self.timerY0)
-		t = timer(self.timerLength)
-		t.initTimer()
-		self.timerProcess = Process(target=t.run)
+		self.timer = timer(self.timerLength)
+		self.timer.initTimer()
+		self.timerProcess = Process(target=self.timer.run)
 		self.timerProcess.start()
 
 	def initDetector(self):
@@ -144,6 +151,16 @@ class mainController():
 		self.camHeight, self.camWidth, channels = frame.shape
 		cv2.imshow('detector', frame)
 		cv2.moveWindow('detector', self.camX0, self.camY0)
+
+	def updateTimerDisplay(self, textX, textY):
+		if (sharedDict['timerFinished']):
+			sharedDict['timerRunning'] = False
+			self.toggleButton()
+
+		t = self.timerImg.copy()
+		text = f":{sharedDict['timerNow']:02}"
+		t = self.addText(t, text, self.font, self.timerFontSize, textX=textX, textY=textY)
+		cv2.imshow('timer',t)
 
 	def start(self):
 		try:
@@ -196,14 +213,11 @@ class mainController():
 							cv2.rectangle(frame, (int(x*xFac), int(y*yFac)), (int((x + w)*xFac), int((y + h)*yFac)), (0, 255, 0), 3)
 					
 					if (sharedDict['timerNow'] is not None):	
-						t = self.timerImg.copy()
-						text = f":{sharedDict['timerNow']:02}"
-						t = self.addText(t, text, self.font, self.timerFontSize, textX=timerTextX, textY=timerTextY)
-						cv2.imshow('timer',t)
+						self.updateTimerDisplay(timerTextX, timerTextY)
 
 
 					sharedDict['frame'] = frame
-					print('here', sharedDict['people'])
+					#print('here', sharedDict['people'])
 					cv2.imshow('detector', frame)
 					#cv2.waitKey(1)
 
@@ -340,7 +354,7 @@ class peopleDetector():
 
 
 
-class timer():#(QThread):
+class timer():
 
 	def __init__(self, timerLength=60):
 
@@ -364,6 +378,8 @@ class timer():#(QThread):
 				#I will probalby want to move this control to the main class (?)							
 				if (self.timerNow < 0):
 					self.initTimer()
+					sharedDict['timerRunning'] = False
+					sharedDict['timerFinished'] = True
 
 				sharedDict['timerNow'] = self.timerNow
 
