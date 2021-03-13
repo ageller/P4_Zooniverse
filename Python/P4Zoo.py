@@ -5,9 +5,6 @@
 
 #Will need to test this with people of different skin tones
 
-#would be nice to have a continuous video going, and just update the numbers when they are available
-# - maybe i can run two threads, one for detect and one for display
-# - display could be at full resolution?
 
 #standard libraries
 import numpy as np
@@ -15,9 +12,7 @@ from numpy.core.multiarray import ndarray
 import time
 import sys 
 import os
-import copy
 
-#it appears the openCV does not work with python's multiprocessing, or Threading
 from multiprocessing import Process, Manager
 manager = Manager()
 sharedDict = manager.dict()
@@ -26,16 +21,210 @@ sharedDict['frameDetect'] = None
 sharedDict['people'] = None
 sharedDict['faceRects'] = None
 sharedDict['timerNow'] = 0
+sharedDict['timerRunning'] = False
 
 #for detecting people and displaying images/buttons
 import cv2
 import dlib
 from imutils import face_utils
 
+from PIL import ImageFont, ImageDraw, Image  
+
+class mainController():
+	#using multithreading so that the displayed video is not slowed down by the detection technique
+	#all image processing (capture, resize, grayscale, etc.) needs to happen here.  Analysis can happen in a thread.
+
+	def __init__(self, source=0):
+		self.source = source
+
+		self.font = '/Volumes/highnoon2go/highnoon/VISUALIZATIONS/Adler_fonts/Heroic/Heroic Condensed/HeroicCondensed-Regular.ttf'
+
+		#define the width and height to use for the displayed image
+		self.camWidth = int(640)*2
+		self.camHeight = int(480)*2
+		self.camX0 = int(700)
+		self.camY0 = int(0)
+		self.camFontSize = 60
+
+		#define the width and height to use in the detection algorithm (<= width and height set above)
+		self.detectWidth = int(640)
+		self.detectHeight = int(480)
+
+		#button
+		self.buttonImagePath = os.path.join('images','circle.png')
+		self.buttonWidth = int(200)
+		self.buttonHeight = int(200)
+		self.buttonX0 = int(700)
+		self.buttonY0 = int(800)
+		self.buttonImage = None #will be defined below
+		self.buttonFontSize = 80
+
+		#edges to define the different regions for people detection
+		self.xEdges = [0, 1/3, 2/3, 1]
+
+		#will hold the camera object
+		self.cam = None
+
+		#will hold the threaded process
+		self.detectorProcess = None
+		self.timerProcess = None
+
+		#parameters for timer
+		self.timerLength = 60
+		self.timerImagePath = os.path.join('images','circle.png')
+		self.timerWidth = int(200)
+		self.timerHeight = int(200)
+		self.timerX0 = int(1000)
+		self.timerY0 = int(800)
+		self.timerFontSize = 100
+		self.timerImg = None #will be defined below
+
+	def onClick(self, event, x, y, flags, param): 
+		if (event == cv2.EVENT_LBUTTONDOWN or event == cv2.EVENT_RBUTTONDOWN): 
+			sharedDict['timerRunning'] = not sharedDict['timerRunning']
+			print('button clicked', sharedDict['timerRunning'])
+			if (sharedDict['timerRunning']):
+				text = 'Pause'
+			else:
+				text = 'Start'
+			t = self.buttonImage.copy()
+			t = self.addText(t, text, self.font, self.buttonFontSize)
+			cv2.imshow('startButton',t)
+
+	def addText(self, img, text, font, fontSize, textX = None, textY = None, color = None):
+		#https://www.codesofinterest.com/2017/07/more-fonts-on-opencv.html
+		#use PIL to draw the text, since that can use true type fonts
+		imgRGB = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+		pilImg = Image.fromarray(imgRGB)  
+		draw = ImageDraw.Draw(pilImg)  
+		font = ImageFont.truetype(font, fontSize)  
+		textsize = font.getsize(text)
+		if (textX is None):
+			textX = int((img.shape[1] - textsize[0])/2)
+		if (textY is None):
+			textY = int((img.shape[0] - textsize[1])/2)
+		if (color is None):
+			color = (0,0,0)
+		draw.text((textX, textY), text, color, font=font)  
+
+		return cv2.cvtColor(np.array(pilImg), cv2.COLOR_RGB2BGR)  
+
+	def initStartButton(self):
+		img = cv2.imread(self.buttonImagePath) 
+		self.buttonImage = cv2.resize(img, (self.buttonWidth, self.buttonHeight))
+		t = self.buttonImage.copy()
+		text = 'Start'
+		t = self.addText(t, text, self.font, self.buttonFontSize)
+		cv2.imshow('startButton',t)
+		cv2.moveWindow('startButton', self.buttonX0, self.buttonY0)
+		cv2.setMouseCallback('startButton', self.onClick) 
+
+	def initTimer(self):
+		img = cv2.imread(self.timerImagePath) 
+		self.timerImg = cv2.resize(img, (self.timerWidth, self.timerHeight))
+		cv2.imshow('timer', self.timerImg) 
+		cv2.moveWindow('timer', self.timerX0, self.timerY0)
+		t = timer(self.timerLength)
+		t.initTimer()
+		self.timerProcess = Process(target=t.run)
+		self.timerProcess.start()
+
+	def initDetector(self):
+		detectEdges = np.array(self.detectWidth*np.array(self.xEdges), dtype=int)
+		d = peopleDetector('DLIBface', detectEdges)
+		self.detectorProcess = Process(target=d.run)
+		self.detectorProcess.start()
+
+	def initCam(self):
+		self.cam = cv2.VideoCapture(self.source)
+		self.cam.set(3, self.camWidth)
+		self.cam.set(4, self.camHeight)
+		#in case the width and height are not possible, get the actual image size
+		grabbed, frame = self.cam.read()
+		self.camHeight, self.camWidth, channels = frame.shape
+		cv2.imshow('detector', frame)
+		cv2.moveWindow('detector', self.camX0, self.camY0)
+
+	def start(self):
+		try:
+
+			#set up the camera and define sizes for annotating the image
+			self.initCam()
+			edges = np.array(self.camWidth*np.array(self.xEdges), dtype=int)
+			xFac = self.camWidth/self.detectWidth
+			yFac = self.camHeight/self.detectHeight
+			#get font locations 
+			font = ImageFont.truetype(self.font, self.camFontSize) 
+			textsize = font.getsize(text = "Count : 100")
+			camTextX = [int((edges[i+1] - edges[i] - textsize[0])/2) + edges[i] for i in range(len(edges) - 1)]
+
+			#set up the people detector and start that thread
+			self.initDetector()
+
+			#set up the timer and start that thread
+			self.initTimer()
+			#get the font location -- numbers in Heroic are different widths, so we don't want the timer jumping around
+			img = cv2.imread(self.timerImagePath) 
+			img = cv2.resize(img, (self.timerWidth, self.timerHeight))
+			font = ImageFont.truetype(self.font, self.timerFontSize)  
+			textsize = font.getsize(text = f":{self.timerLength:02}")
+			timerTextX = int((img.shape[1] - textsize[0])/2)
+			timerTextY = int((img.shape[0] - textsize[1])/2)
+
+			#set up the start/pause button
+			self.initStartButton()
+
+			#start the loop to grab frames and add them to the shared dict, and then display the image
+			while True:
+				grabbed, frame = self.cam.read()
+				#print(grabbed, frame)
+				if (frame is not None):
+					#define the image for the detector (making a copy in case my edits below change this)
+					frameResized = cv2.resize(frame, (self.detectWidth, self.detectHeight))
+					frameDetect = cv2.cvtColor(frameResized, cv2.COLOR_BGR2GRAY)
+					sharedDict['frameDetect'] = frameDetect.copy()
+
+					#annotate the frame
+					if (sharedDict['people'] is not None):
+						for i,n in enumerate(sharedDict['people']):
+							cv2.line(frame, (edges[i+1] ,0),(edges[i+1] ,self.camHeight),(255,255,255),4)
+							text = f'Count : {n}'
+							frame = self.addText(frame, text, self.font, self.camFontSize, textX=camTextX[i], textY=10, color=(255, 0, 255))
+
+					if (sharedDict['faceRects'] is not None):	
+						for (x,y,w,h) in sharedDict['faceRects']:
+							cv2.rectangle(frame, (int(x*xFac), int(y*yFac)), (int((x + w)*xFac), int((y + h)*yFac)), (0, 255, 0), 3)
+					
+					if (sharedDict['timerNow'] is not None):	
+						t = self.timerImg.copy()
+						text = f":{sharedDict['timerNow']:02}"
+						t = self.addText(t, text, self.font, self.timerFontSize, textX=timerTextX, textY=timerTextY)
+						cv2.imshow('timer',t)
+
+
+					sharedDict['frame'] = frame
+					print('here', sharedDict['people'])
+					cv2.imshow('detector', frame)
+					#cv2.waitKey(1)
+
+				if (cv2.waitKey(1) == ord('q')):
+					self.stop()
+					break
+
+		except KeyboardInterrupt:
+			self.stop()
+
+	def stop(self):
+		print('done')
+		cv2.destroyAllWindows()
+		self.detectorProcess.terminate()
+		self.detectorProcess.join()
+		self.timerProcess.terminate()
+		self.timerProcess.join()
 
 
 #people counter
-class peopleDetector():#(QThread):
+class peopleDetector():
 
 	def __init__(self, meth='DLIBface', edges=[0,1],):
 		#choose between detecting by face or by the full person.  Face seems much more stable
@@ -158,17 +347,18 @@ class timer():#(QThread):
 		self.timerLength = timerLength #seconds
 		self.startTime = 0
 		self.timerNow = self.timerLength 
-		self.timerRunning = True #can be toggled with the start/pause button
 
 	def initTimer(self):
 		self.startTime = time.time()
 		self.timerNow = self.timerLength
+		sharedDict['timerNow'] = self.timerNow
 
 	def run(self):
 		self.initTimer()
 		while True:
+
 			#check the timer
-			if (self.timerRunning):
+			if (sharedDict['timerRunning']):
 				self.timerNow = self.timerLength - int(np.round(time.time() - self.startTime))
 
 				#I will probalby want to move this control to the main class (?)							
@@ -177,143 +367,15 @@ class timer():#(QThread):
 
 				sharedDict['timerNow'] = self.timerNow
 
-
-
-
-class camHandler():
-	#using multithreading so that the displayed video is not slowed down by the detection technique
-	#all image processing (capture, resize, grayscale, etc.) needs to happen here.  Analysis can happen in a thread.
-
-	def __init__(self, source=0):
-		self.source = source
-
-		#define the width and height to use for the displayed image
-		self.width = int(640)*2
-		self.height = int(480)*2
-		self.mainX0 = int(700)
-		self.mainY0 = int(0)
-
-		#define the width and height to use in the detection algorithm (<= width and height set above)
-		self.detectWidth = int(640)
-		self.detectHeight = int(480)
-
-		#button
-		self.buttonImagePath = os.path.join('buttonImages','start.png')
-		self.buttonWidth = int(200)
-		self.buttonHeight = int(200)
-		self.buttonX0 = int(1000)
-		self.buttonY0 = int(800)
-
-		#edges to define the different regions for people detection
-		self.xEdges = [0, 1/3, 2/3, 1]
-
-		#font displayed on top of the video (could define on input)
-		self.fontSize = 0.5
-
-		#will hold the camera object
-		self.cam = None
-
-		#will hold the detector process
-		self.detectorProcess = None
-
-		#will hold the timer process
-		self.timer = None
-		self.timerLength = 60
-
-	def onClick(self, event, x, y, flags, param): 
-		if (event == cv2.EVENT_LBUTTONDOWN or event == cv2.EVENT_RBUTTONDOWN): 
-			print('button clicked')
-
-	def start(self):
-		try:
-			#set up the camera
-			self.cam = cv2.VideoCapture(self.source)
-			self.cam.set(3, self.width)
-			self.cam.set(4, self.height)
-			#in case the width and height are not possible, get the actual image size
-			grabbed, frame = self.cam.read()
-			self.height, self.width, channels = frame.shape
-			cv2.imshow('detector', frame)
-			cv2.moveWindow('detector', self.mainX0, self.mainY0)
-
-			#set up the people detector and start that thread
-			detectEdges = np.array(self.detectWidth*np.array(self.xEdges), dtype=int)
-			d = peopleDetector('DLIBface', detectEdges)
-			self.detectorProcess = Process(target=d.run)
-			self.detectorProcess.start()
-
-			#set up the timer and start that thread
-			t = timer(self.timerLength)
-			self.timerProcess = Process(target=t.run)
-			self.timerProcess.start()
-
-			#set up the start/pause button
-			img = cv2.imread(self.buttonImagePath) 
-			cv2.resize(img, (self.buttonWidth, self.buttonHeight))
-			cv2.imshow('startButton', img) 
-			cv2.moveWindow('startButton', self.buttonX0, self.buttonY0)
-			cv2.setMouseCallback('startButton', self.onClick) 
-
-
-			#define sizes for annotating the image
-			edges = np.array(self.width*np.array(self.xEdges), dtype=int)
-			xFac = self.width/self.detectWidth
-			yFac = self.height/self.detectHeight
-
-			#start the loop to grab frames and add them to the shared dict, and then display the image
-			while True:
-				grabbed, frame = self.cam.read()
-				#print(grabbed, frame)
-				if (frame is not None):
-					#define the image for the detector (making a copy in case my edits below change this)
-					frameResized = cv2.resize(frame, (self.detectWidth, self.detectHeight))
-					frameDetect = cv2.cvtColor(frameResized, cv2.COLOR_BGR2GRAY)
-					sharedDict['frameDetect'] = copy.copy(frameDetect)
-
-					#annotate the frame
-					if (sharedDict['people'] is not None):
-						for i,n in enumerate(sharedDict['people']):
-							cv2.line(frame, (edges[i+1] ,0),(edges[i+1] ,self.height),(255,255,255),4)
-							cv2.putText(frame, f'Count : {n}', (edges[i]+40,40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 2)
-
-					if (sharedDict['faceRects'] is not None):	
-						for (x,y,w,h) in sharedDict['faceRects']:
-							cv2.rectangle(frame, (int(x*xFac), int(y*yFac)), (int((x + w)*xFac), int((y + h)*yFac)), (0, 255, 0), 3)
-					
-					if (sharedDict['timerNow'] is not None):	
-						cv2.putText(frame, f":{sharedDict['timerNow']}", (40,self.height - 40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255, 0), 2)
-
-					sharedDict['frame'] = frame
-					print('here', sharedDict['people'])
-					cv2.imshow('detector', frame)
-					#cv2.waitKey(1)
-
-				if (cv2.waitKey(1) == ord('q')):
-					self.stop()
-					break
-
-		except KeyboardInterrupt:
-			self.stop()
-
-	def stop(self):
-		print('done')
-		cv2.destroyAllWindows()
-		self.detectorProcess.terminate()
-		self.detectorProcess.join()
-		self.timerProcess.terminate()
-		self.timerProcess.join()
+			else: #when it's paused
+				self.startTime = time.time() - (self.timerLength - self.timerNow)
 
 
 
 if __name__ == "__main__":
 
-
-
-
-
-
-	cam = camHandler(1)
-	cam.timerLength = 10
-	cam.start()
+	c = mainController(1)
+	c.timerLength = 10
+	c.start()
 
 
