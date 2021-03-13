@@ -14,254 +14,23 @@ import numpy as np
 from numpy.core.multiarray import ndarray
 import time
 import sys 
+import os
 import copy
 
 #it appears the openCV does not work with python's multiprocessing, or Threading
 from multiprocessing import Process, Manager
 manager = Manager()
 sharedDict = manager.dict()
+sharedDict['frame'] = None
 sharedDict['frameDetect'] = None
 sharedDict['people'] = None
 sharedDict['faceRects'] = None
 sharedDict['timerNow'] = 0
 
-#for detecting people
+#for detecting people and displaying images/buttons
 import cv2
 import dlib
 from imutils import face_utils
-
-
-#for the button
-from PyQt5.QtWidgets import * 
-from PyQt5.QtGui import * 
-from PyQt5.QtCore import * 
-
-
- 
-#class that controls all processes and is called to start app
-#https://stackoverflow.com/questions/44404349/pyqt-showing-video-stream-from-opencv/44404713
-class main(QMainWindow):
-
-	def __init__(self, cam):
-		super().__init__()
-
-
-		#define the webcam and the width and height (in pixels) to scale the image
-		self.cam = cam
-		self.width = int(640)
-		self.height = int(360)
-
-		#divisions
-		#should correspond with width; maybe I should make this a fraction?
-		self.xEdges = [0, 1/3, 2/3, 1]
-
-		self.setWindowTitle("") 
-
-
-		#open the start/pause button
-		self.button = buttonWindow()
-		self.button.show()
-
-
-
-	# @pyqtSlot(QImage)
-	# def setImage(self, image):
-	# 	self.label.setPixmap(QPixmap.fromImage(image))
-
-	def setImage(self, image):
-		cv2.imshow('',image)
-
-	def run(self):
-		self.setGeometry(100, 100, self.width, self.height) 
-
-		# create a label (I think this is required to show connect the webcam)
-		# self.label = QLabel(self)
-		# self.label.resize(self.width, self.height)
-
-		# #set up the timer
-		# self.timer = timer(self)
-		# self.timer.init()
-		# self.timer.timerRunning = True #will use the button later
-		# self.timer.timerLength = 10 #seconds
-		# self.timer.start()
-
-		#set up the webcam
-		#trying this with multiprocessing instead to see if there is a speedup
-
-		self.capture = captureWebcam(self.cam)
-		self.captureProcess = Thread(target=self.capture.run)
-		self.captureProcess.start()
-
-		self.display = showWebcam(self.capture)
-		self.display.changePixmap.connect(self.setImage)
-		self.display.run()
-
-		# self.cam = captureWebcam(self.q, self.camNumber)#self)
-		# #self.cam.timer = self.timer
-		# self.cam.width = self.width
-		# self.cam.height = self.height
-		# self.cam.xEdges = self.xEdges
-		# #self.cam.changePixmap.connect(self.setImage)
-		# #self.cam.init()
-		# self.camProcess = Process(target=self.cam.run)
-		# self.camProcess.start()
-		# #self.cam.start()
-
-		# #set up the opencv2 people counter 
-		# #this is causing a slowdown, but I thought this was in a separate thread??.  Maybe opencv needs to be threaded? is it waiting?
-		# #trying this with multiprocessing instead to see if there is a speedup
-		# self.counter = countPeople(self.q)#self)
-		# self.counter.camNumber = self.camNumber
-		# self.counter.width = self.width
-		# self.counter.height = self.height
-		# self.counter.xEdges = self.xEdges
-		# self.counter.cam = self.cam
-		# self.counter.init()
-		# self.counterProcess = Process(target=self.counter.run)
-		# self.counterProcess.start()
-		# #self.counter.start()
-
-
-
-
-		#show the main window
-		self.show()
-
-	def closeEvent(self, event):
-		self.button.close()
-		#self.counterProcess.terminate()
-		self.capture.terminate()
-		event.accept()
-
-
-
-
-
-
-#grab webcam image
-class captureWebcam():
-
-	def __init__(self, cam):
-		self.cam = cam
-		self.frame = None
-		self.running = True
-
-	def terminate(self):
-		self.running = False
-
-	def run(self):
-		print('here')
-
-		while self.running:
-			ret, self.frame = self.cam.read()
-			print('frame', ret, self.frame, self.cam)
-
-		self.cam.release()
-		cv2.destroyAllWindows() #not sure this is still necessary
-
-class showWebcam(QThread):
-	changePixmap = pyqtSignal(ndarray)
-
-	def __init__(self, capture):
-		super(showWebcam, self).__init__()
-		self.capture = capture
-
-	def run(self):
-		while True:
-			try:
-				image = self.capture.frame
-				self.changePixmap.emit(image)
-				return
-			except:
-				pass
-
-# class webcamCapture(QThread):
-
-# 	changePixmap = pyqtSignal(QImage)
-# 	def init(self):
-# 		self.frame = None
-# 		self.people = None
-
-# 		#font displayed on top of the video (could define on input)
-# 		self.fontSize = 2
-
-
-# 	def run(self):
-# 		cap = cv2.VideoCapture(self.camNumber)
-# 		width  = int(cap.get(3))  
-# 		height = int(cap.get(4))  
-# 		self.edges = np.array(width*np.array(self.xEdges), dtype=int)
-
-# 		while True:
-
-# 			ret, f = cap.read()
-# 			self.frame = f
-# 			if ret:
-# 				#annotate video
-# 				#timer
-# 				cv2.putText(self.frame, f':{self.timer.timerNow}', (40, height - 40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255, 0), 4)
-# 				for i in range(len(self.edges) - 1):
-# 				#edge lines
-# 					cv2.line(self.frame, (self.edges[i+1] ,0),(self.edges[i+1] ,height),(255,255,255),8)
-# 					if (self.people is not None):
-# 						#number of people
-# 						cv2.putText(self.frame, f'Count : {self.people[i]}', (self.edges[i]+40,80), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,0,255), 4)
-
-
-# 				print(self.people)
-
-# 				#check the timer
-# 				if (self.timer.timerNow < 0): #this will allow the timer to display 0 on the screen
-# 					#for now
-# 					#time.sleep(3)
-
-# 					#reset the timer
-# 					self.timer.initTimer()
-
-# 				# display the image	
-# 				# https://stackoverflow.com/a/55468544/6622587
-# 				rgbImage = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
-# 				h, w, ch = rgbImage.shape
-# 				bytesPerLine = ch * w
-# 				convertToQtFormat = QImage(rgbImage.data, w, h, bytesPerLine, QImage.Format_RGB888)
-# 				p = convertToQtFormat.scaled(self.width, self.height, Qt.KeepAspectRatio)
-# 				self.changePixmap.emit(p)
-
-
-
-# 		cap.release()
-# 		cv2.destroyAllWindows() #not sure this is still necessary
-
-
-# 	def addToImage(self):
-# 		print("foo")
-
-
-#https://www.geeksforgeeks.org/pyqt5-create-circular-push-button/
-#start/pause button
-class buttonWindow(QWidget): 
-	def __init__(self): 
-		super().__init__() 
-
-		self.setGeometry(100, 700, 140, 140) 
-		self.setWindowFlag(Qt.FramelessWindowHint) 
-		self.UiComponents() 
-		self.show() 
-
-	# method for creating widgets 
-	def UiComponents(self): 
-
-		# creating a push button 
-		button = QPushButton("CLICK", self) 
-		button.setGeometry(20, 20, 100, 100) 
-		button.setStyleSheet("border-radius: 50;  border: 2px solid black") 
-		button.clicked.connect(self.clickme) 
-
-	# action method 
-	def clickme(self): 
-		print("pressed")
-
-
 
 
 
@@ -409,6 +178,8 @@ class timer():#(QThread):
 				sharedDict['timerNow'] = self.timerNow
 
 
+
+
 class camHandler():
 	#using multithreading so that the displayed video is not slowed down by the detection technique
 	#all image processing (capture, resize, grayscale, etc.) needs to happen here.  Analysis can happen in a thread.
@@ -419,10 +190,19 @@ class camHandler():
 		#define the width and height to use for the displayed image
 		self.width = int(640)*2
 		self.height = int(480)*2
+		self.mainX0 = int(700)
+		self.mainY0 = int(0)
 
 		#define the width and height to use in the detection algorithm (<= width and height set above)
 		self.detectWidth = int(640)
 		self.detectHeight = int(480)
+
+		#button
+		self.buttonImagePath = os.path.join('buttonImages','start.png')
+		self.buttonWidth = int(200)
+		self.buttonHeight = int(200)
+		self.buttonX0 = int(1000)
+		self.buttonY0 = int(800)
 
 		#edges to define the different regions for people detection
 		self.xEdges = [0, 1/3, 2/3, 1]
@@ -440,6 +220,10 @@ class camHandler():
 		self.timer = None
 		self.timerLength = 60
 
+	def onClick(self, event, x, y, flags, param): 
+		if (event == cv2.EVENT_LBUTTONDOWN or event == cv2.EVENT_RBUTTONDOWN): 
+			print('button clicked')
+
 	def start(self):
 		try:
 			#set up the camera
@@ -449,6 +233,8 @@ class camHandler():
 			#in case the width and height are not possible, get the actual image size
 			grabbed, frame = self.cam.read()
 			self.height, self.width, channels = frame.shape
+			cv2.imshow('detector', frame)
+			cv2.moveWindow('detector', self.mainX0, self.mainY0)
 
 			#set up the people detector and start that thread
 			detectEdges = np.array(self.detectWidth*np.array(self.xEdges), dtype=int)
@@ -460,6 +246,14 @@ class camHandler():
 			t = timer(self.timerLength)
 			self.timerProcess = Process(target=t.run)
 			self.timerProcess.start()
+
+			#set up the start/pause button
+			img = cv2.imread(self.buttonImagePath) 
+			cv2.resize(img, (self.buttonWidth, self.buttonHeight))
+			cv2.imshow('startButton', img) 
+			cv2.moveWindow('startButton', self.buttonX0, self.buttonY0)
+			cv2.setMouseCallback('startButton', self.onClick) 
+
 
 			#define sizes for annotating the image
 			edges = np.array(self.width*np.array(self.xEdges), dtype=int)
@@ -489,7 +283,9 @@ class camHandler():
 					if (sharedDict['timerNow'] is not None):	
 						cv2.putText(frame, f":{sharedDict['timerNow']}", (40,self.height - 40), cv2.FONT_HERSHEY_SIMPLEX, self.fontSize, (255,255, 0), 2)
 
-					cv2.imshow('', frame)
+					sharedDict['frame'] = frame
+					print('here', sharedDict['people'])
+					cv2.imshow('detector', frame)
 					#cv2.waitKey(1)
 
 				if (cv2.waitKey(1) == ord('q')):
@@ -501,27 +297,23 @@ class camHandler():
 
 	def stop(self):
 		print('done')
+		cv2.destroyAllWindows()
 		self.detectorProcess.terminate()
 		self.detectorProcess.join()
 		self.timerProcess.terminate()
 		self.timerProcess.join()
 
+
+
 if __name__ == "__main__":
+
+
+
+
+
 
 	cam = camHandler(1)
 	cam.timerLength = 10
 	cam.start()
 
 
-	# execute only if run as a script
-	# counter = peopleCounter()
-	# counter.timerLength = 10
-	# counter.timerRunning = True
-	# counter.detectByWebcam() #type q to stop
-
-	# # create pyqt5 app 
-	# cam = cv2.VideoCapture(1)
-	# app = QApplication(sys.argv) 
-	# w = main(cam)
-	# w.run()
-	# sys.exit(app.exec_())
