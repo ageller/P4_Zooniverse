@@ -40,12 +40,19 @@ class mainController():
 
 		self.font = '/Volumes/highnoon2go/highnoon/VISUALIZATIONS/Adler_fonts/Heroic/Heroic Condensed/HeroicCondensed-Regular.ttf'
 
+		self.outputFileName = 'results.csv'
+		self.ofile = None #will contain the file object
+
 		#define the width and height to use for the displayed image
 		self.camWidth = int(640)*2
 		self.camHeight = int(480)*2
 		self.camX0 = int(700)
 		self.camY0 = int(0)
 		self.camFontSize = 60
+		self.camFadeLength = 40
+		self.camFadeIter = 0
+		self.fading = False
+		self.blankImage = None #will contain an image to fade out to (defined below)
 
 		#define the width and height to use in the detection algorithm (<= width and height set above)
 		self.detectWidth = int(640)
@@ -81,15 +88,19 @@ class mainController():
 		self.timerFontSize = 100
 		self.timerImg = None #will be defined below
 
+		self.imageIndex = 0 #this is a dummy index for writing to a file, when working with real images, I will use the proper naming convention
+
 	def onClick(self, event, x, y, flags, param): 
+		#handle click events in the button window
 		if (event == cv2.EVENT_LBUTTONDOWN or event == cv2.EVENT_RBUTTONDOWN): 
 			sharedDict['timerRunning'] = not sharedDict['timerRunning']
 			if (sharedDict['timerRunning']):
 				sharedDict['timerFinished'] = False
-			print('button clicked', sharedDict['timerRunning'])
+			#print('button clicked', sharedDict['timerRunning'])
 			self.toggleButton()
 
 	def toggleButton(self):
+		#toggle the text in the start/pause button
 		if (sharedDict['timerRunning']):
 			text = 'Pause'
 		else:
@@ -117,6 +128,7 @@ class mainController():
 		return cv2.cvtColor(np.array(pilImg), cv2.COLOR_RGB2BGR)  
 
 	def initStartButton(self):
+		#initialize the start/pause button
 		img = cv2.imread(self.buttonImagePath) 
 		self.buttonImage = cv2.resize(img, (self.buttonWidth, self.buttonHeight))
 		t = self.buttonImage.copy()
@@ -127,6 +139,7 @@ class mainController():
 		cv2.setMouseCallback('startButton', self.onClick) 
 
 	def initTimer(self):
+		#initialize the timer and start the process
 		img = cv2.imread(self.timerImagePath) 
 		self.timerImg = cv2.resize(img, (self.timerWidth, self.timerHeight))
 		cv2.imshow('timer', self.timerImg) 
@@ -137,12 +150,14 @@ class mainController():
 		self.timerProcess.start()
 
 	def initDetector(self):
+		#initialize the detector and start the process
 		detectEdges = np.array(self.detectWidth*np.array(self.xEdges), dtype=int)
 		d = peopleDetector('DLIBface', detectEdges)
 		self.detectorProcess = Process(target=d.run)
 		self.detectorProcess.start()
 
 	def initCam(self):
+		#initialize the camera
 		self.cam = cv2.VideoCapture(self.source)
 		self.cam.set(3, self.camWidth)
 		self.cam.set(4, self.camHeight)
@@ -151,19 +166,63 @@ class mainController():
 		self.camHeight, self.camWidth, channels = frame.shape
 		cv2.imshow('detector', frame)
 		cv2.moveWindow('detector', self.camX0, self.camY0)
+		#create a blank white image to use for fading out
+		self.blankImage = np.zeros(frame.shape,dtype=np.uint8)
+		self.blankImage.fill(255)
+
+	def initOutputFile(self):
+		#initialize the output file
+		if (os.path.isfile(self.outputFileName)):
+			#if the file exists open to append
+			self.ofile = open(self.outputFileName, 'a')
+		else:
+			#if it's a new file, create it and write the header
+			self.ofile = open(self.outputFileName, 'w')
+			header = 'image'
+			for i in range(len(self.xEdges) - 1):
+				header += ',category'+str(i) #this will be updated to the actual categories
+			self.ofile.write(header+'\n')
+			self.ofile.flush()
 
 	def updateTimerDisplay(self, textX, textY):
+		#update the text in the display and control what happens when timer ends
 		if (sharedDict['timerFinished']):
 			sharedDict['timerRunning'] = False
+			sharedDict['timerFinished'] = False
 			self.toggleButton()
+			self.fading = True
 
 		t = self.timerImg.copy()
 		text = f":{sharedDict['timerNow']:02}"
 		t = self.addText(t, text, self.font, self.timerFontSize, textX=textX, textY=textY)
 		cv2.imshow('timer',t)
 
+	def fadeToWhite(self):
+		#blend the image with a white frame to fade it out to white (after the time ends)
+		self.camFadeIter += 1
+		if (self.camFadeIter == self.camFadeLength):
+			self.camFadeIter = 0
+			self.fading = False
+
+		mix = self.camFadeIter/self.camFadeLength
+		return cv2.addWeighted( sharedDict['frame'], 1 - mix, self.blankImage, mix, 0)
+
+	def outputResults(self):
+		#output the results to a file
+		print("results",sharedDict['people'])
+		line = f'image{self.imageIndex:04}'
+		for p in sharedDict['people']:
+			line += ','+str(p)
+		self.ofile.write(line+'\n')
+		self.ofile.flush()
+		self.imageIndex += 1 #this should  be moved to a function that grabs the image (and probably want a better naming convention)
+
 	def start(self):
+		#start everything, including the main loop that grabs and displays the camera image
+
 		try:
+			#initialize the output file
+			self.initOutputFile()
 
 			#set up the camera and define sizes for annotating the image
 			self.initCam()
@@ -193,37 +252,46 @@ class mainController():
 
 			#start the loop to grab frames and add them to the shared dict, and then display the image
 			while True:
-				grabbed, frame = self.cam.read()
-				#print(grabbed, frame)
+				if (sharedDict['timerNow'] is not None):	
+					self.updateTimerDisplay(timerTextX, timerTextY)
+
+				if (not self.fading):
+					grabbed, frame = self.cam.read()
+					#print(grabbed, frame)
+					if (frame is not None):
+						#define the image for the detector (making a copy in case my edits below change this)
+						frameResized = cv2.resize(frame, (self.detectWidth, self.detectHeight))
+						frameDetect = cv2.cvtColor(frameResized, cv2.COLOR_BGR2GRAY)
+						sharedDict['frameDetect'] = frameDetect.copy()
+
+						#annotate the frame
+						if (sharedDict['people'] is not None):
+							for i,n in enumerate(sharedDict['people']):
+								cv2.line(frame, (edges[i+1] ,0),(edges[i+1] ,self.camHeight),(255,255,255),4)
+								text = f'Count : {n}'
+								frame = self.addText(frame, text, self.font, self.camFontSize, textX=camTextX[i], textY=10, color=(255, 0, 255))
+
+						if (sharedDict['faceRects'] is not None):	
+							for (x,y,w,h) in sharedDict['faceRects']:
+								cv2.rectangle(frame, (int(x*xFac), int(y*yFac)), (int((x + w)*xFac), int((y + h)*yFac)), (0, 255, 0), 3)
+						
+						sharedDict['frame'] = frame
+
+				if (self.fading):
+					frame = self.fadeToWhite()
+
+				#print('here', sharedDict['people'])
 				if (frame is not None):
-					#define the image for the detector (making a copy in case my edits below change this)
-					frameResized = cv2.resize(frame, (self.detectWidth, self.detectHeight))
-					frameDetect = cv2.cvtColor(frameResized, cv2.COLOR_BGR2GRAY)
-					sharedDict['frameDetect'] = frameDetect.copy()
-
-					#annotate the frame
-					if (sharedDict['people'] is not None):
-						for i,n in enumerate(sharedDict['people']):
-							cv2.line(frame, (edges[i+1] ,0),(edges[i+1] ,self.camHeight),(255,255,255),4)
-							text = f'Count : {n}'
-							frame = self.addText(frame, text, self.font, self.camFontSize, textX=camTextX[i], textY=10, color=(255, 0, 255))
-
-					if (sharedDict['faceRects'] is not None):	
-						for (x,y,w,h) in sharedDict['faceRects']:
-							cv2.rectangle(frame, (int(x*xFac), int(y*yFac)), (int((x + w)*xFac), int((y + h)*yFac)), (0, 255, 0), 3)
-					
-					if (sharedDict['timerNow'] is not None):	
-						self.updateTimerDisplay(timerTextX, timerTextY)
-
-
-					sharedDict['frame'] = frame
-					#print('here', sharedDict['people'])
 					cv2.imshow('detector', frame)
-					#cv2.waitKey(1)
-
+				
+				#cv2.waitKey(1)
 				if (cv2.waitKey(1) == ord('q')):
 					self.stop()
 					break
+
+				if (sharedDict['timerFinished']):
+					self.outputResults()
+
 
 		except KeyboardInterrupt:
 			self.stop()
@@ -235,6 +303,7 @@ class mainController():
 		self.detectorProcess.join()
 		self.timerProcess.terminate()
 		self.timerProcess.join()
+		self.ofile.close()
 
 
 #people counter
