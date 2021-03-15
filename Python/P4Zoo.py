@@ -29,7 +29,7 @@ import cv2
 import dlib
 from imutils import face_utils
 
-from PIL import ImageFont, ImageDraw, Image  
+from PIL import ImageFont, ImageColor, ImageDraw, Image  
 
 class mainController():
 	#using multithreading so that the displayed video is not slowed down by the detection technique
@@ -38,8 +38,9 @@ class mainController():
 	def __init__(self, source=0):
 		self.source = source
 
-		self.font = '/Volumes/highnoon2go/highnoon/VISUALIZATIONS/Adler_fonts/Heroic/Heroic Condensed/HeroicCondensed-Regular.ttf'
-
+		#self.font = '/Users/ageller/VISUALIZATIONS/Adler_fonts/Heroic/Heroic Condensed/HeroicCondensed-Regular.ttf'
+		self.font = '/Users/ageller/VISUALIZATIONS/Adler_fonts/Karla/static/Karla-Regular.ttf'
+		
 		self.categories = ['Craters','Neither','Spiders']
 
 		self.outputFileName = 'results.csv'
@@ -51,6 +52,8 @@ class mainController():
 		self.camX0 = int(700)
 		self.camY0 = int(0)
 		self.camFontSize = 60
+		self.camFontColor = '#00979D'
+		self.camRectColor = '#00979D'
 		self.camFadeLength = 40
 		self.camFadeIter = 0
 		self.fading = False
@@ -67,7 +70,8 @@ class mainController():
 		self.buttonX0 = int(700)
 		self.buttonY0 = int(800)
 		self.buttonImage = None #will be defined below
-		self.buttonFontSize = 80
+		self.buttonFontSize = 60#80
+		self.buttonFontColor = '#00979D'
 
 		#edges to define the different regions for people detection
 		self.xEdges = [None] #will be defined below [0, 1/3, 2/3, 1]
@@ -87,7 +91,7 @@ class mainController():
 		self.timerHeight = int(200)
 		self.timerX0 = int(1000)
 		self.timerY0 = int(800)
-		self.timerFontSize = 100
+		self.timerFontSize = 90#100
 		self.timerImg = None #will be defined below
 
 		self.imageIndex = 0 #this is a dummy index for writing to a file, when working with real images, I will use the proper naming convention
@@ -108,7 +112,7 @@ class mainController():
 		else:
 			text = 'Start'
 		t = self.buttonImage.copy()
-		t = self.addText(t, text, self.font, self.buttonFontSize)
+		t = self.addText(t, text, self.font, self.buttonFontSize, color=self.buttonFontColor)
 		cv2.imshow('startButton',t)
 
 	def addText(self, img, text, font, fontSize, textX = None, textY = None, color = None):
@@ -135,7 +139,7 @@ class mainController():
 		self.buttonImage = cv2.resize(img, (self.buttonWidth, self.buttonHeight))
 		t = self.buttonImage.copy()
 		text = 'Start'
-		t = self.addText(t, text, self.font, self.buttonFontSize)
+		t = self.addText(t, text, self.font, self.buttonFontSize, color=self.buttonFontColor)
 		cv2.imshow('startButton',t)
 		cv2.moveWindow('startButton', self.buttonX0, self.buttonY0)
 		cv2.setMouseCallback('startButton', self.onClick) 
@@ -182,7 +186,7 @@ class mainController():
 
 		t = self.timerImg.copy()
 		text = f":{sharedDict['timerNow']:02}"
-		t = self.addText(t, text, self.font, self.timerFontSize, textX=textX, textY=textY)
+		t = self.addText(t, text, self.font, self.timerFontSize, textX=textX, textY=textY, color=self.buttonFontColor)
 		cv2.imshow('timer',t)
 
 	def fadeToWhite(self):
@@ -243,7 +247,7 @@ class mainController():
 
 			#set up the timer and start that thread
 			self.initTimer()
-			#get the font location -- numbers in Heroic are different widths, so we don't want the timer jumping around
+			#get the font location -- in case the numbers are different widths, we don't want the timer jumping around
 			img = cv2.imread(self.timerImagePath) 
 			img = cv2.resize(img, (self.timerWidth, self.timerHeight))
 			font = ImageFont.truetype(self.font, self.timerFontSize)  
@@ -273,11 +277,11 @@ class mainController():
 							for i,n in enumerate(sharedDict['people']):
 								cv2.line(frame, (edges[i+1] ,0),(edges[i+1] ,self.camHeight),(255,255,255),4)
 								text = f'{self.categories[i]} : {n}'
-								frame = self.addText(frame, text, self.font, self.camFontSize, textX=camTextX[i], textY=10, color=(255, 0, 255))
+								frame = self.addText(frame, text, self.font, self.camFontSize, textX=camTextX[i], textY=10, color=self.camFontColor)
 
 						if (sharedDict['faceRects'] is not None):	
 							for (x,y,w,h) in sharedDict['faceRects']:
-								cv2.rectangle(frame, (int(x*xFac), int(y*yFac)), (int((x + w)*xFac), int((y + h)*yFac)), (0, 255, 0), 3)
+								cv2.rectangle(frame, (int(x*xFac), int(y*yFac)), (int((x + w)*xFac), int((y + h)*yFac)), ImageColor.getcolor(self.camRectColor,'RGB')[::-1], 3)
 						
 						sharedDict['frame'] = frame
 
