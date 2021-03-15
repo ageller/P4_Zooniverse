@@ -40,6 +40,8 @@ class mainController():
 
 		self.font = '/Volumes/highnoon2go/highnoon/VISUALIZATIONS/Adler_fonts/Heroic/Heroic Condensed/HeroicCondensed-Regular.ttf'
 
+		self.categories = ['Craters','Neither','Spiders']
+
 		self.outputFileName = 'results.csv'
 		self.ofile = None #will contain the file object
 
@@ -68,7 +70,7 @@ class mainController():
 		self.buttonFontSize = 80
 
 		#edges to define the different regions for people detection
-		self.xEdges = [0, 1/3, 2/3, 1]
+		self.xEdges = [None] #will be defined below [0, 1/3, 2/3, 1]
 
 		#will hold the camera object
 		self.cam = None
@@ -170,20 +172,6 @@ class mainController():
 		self.blankImage = np.zeros(frame.shape,dtype=np.uint8)
 		self.blankImage.fill(255)
 
-	def initOutputFile(self):
-		#initialize the output file
-		if (os.path.isfile(self.outputFileName)):
-			#if the file exists open to append
-			self.ofile = open(self.outputFileName, 'a')
-		else:
-			#if it's a new file, create it and write the header
-			self.ofile = open(self.outputFileName, 'w')
-			header = 'image'
-			for i in range(len(self.xEdges) - 1):
-				header += ',category'+str(i) #this will be updated to the actual categories
-			self.ofile.write(header+'\n')
-			self.ofile.flush()
-
 	def updateTimerDisplay(self, textX, textY):
 		#update the text in the display and control what happens when timer ends
 		if (sharedDict['timerFinished']):
@@ -207,6 +195,20 @@ class mainController():
 		mix = self.camFadeIter/self.camFadeLength
 		return cv2.addWeighted( sharedDict['frame'], 1 - mix, self.blankImage, mix, 0)
 
+	def initOutputFile(self):
+		#initialize the output file
+		if (os.path.isfile(self.outputFileName)):
+			#if the file exists open to append
+			self.ofile = open(self.outputFileName, 'a')
+		else:
+			#if it's a new file, create it and write the header
+			self.ofile = open(self.outputFileName, 'w')
+			header = 'image'
+			for x in self.categories:
+				header += ','+x
+			self.ofile.write(header+'\n')
+			self.ofile.flush()
+
 	def outputResults(self):
 		#output the results to a file
 		print("results",sharedDict['people'])
@@ -226,12 +228,14 @@ class mainController():
 
 			#set up the camera and define sizes for annotating the image
 			self.initCam()
+			if (self.xEdges[0] is None):
+				self.xEdges = np.linspace(0, 1, len(self.categories) + 1)
 			edges = np.array(self.camWidth*np.array(self.xEdges), dtype=int)
 			xFac = self.camWidth/self.detectWidth
 			yFac = self.camHeight/self.detectHeight
 			#get font locations 
 			font = ImageFont.truetype(self.font, self.camFontSize) 
-			textsize = font.getsize(text = "Count : 100")
+			textsize = font.getsize(text = max(self.categories, key=len)+" : 100")
 			camTextX = [int((edges[i+1] - edges[i] - textsize[0])/2) + edges[i] for i in range(len(edges) - 1)]
 
 			#set up the people detector and start that thread
@@ -268,7 +272,7 @@ class mainController():
 						if (sharedDict['people'] is not None):
 							for i,n in enumerate(sharedDict['people']):
 								cv2.line(frame, (edges[i+1] ,0),(edges[i+1] ,self.camHeight),(255,255,255),4)
-								text = f'Count : {n}'
+								text = f'{self.categories[i]} : {n}'
 								frame = self.addText(frame, text, self.font, self.camFontSize, textX=camTextX[i], textY=10, color=(255, 0, 255))
 
 						if (sharedDict['faceRects'] is not None):	
