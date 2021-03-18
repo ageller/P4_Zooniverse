@@ -9,6 +9,8 @@
 #standard libraries
 import numpy as np
 from numpy.core.multiarray import ndarray
+import pandas as pd
+import json
 import time
 import sys 
 import os
@@ -35,15 +37,18 @@ class mainController():
 	#using multithreading so that the displayed video is not slowed down by the detection technique
 	#all image processing (capture, resize, grayscale, etc.) needs to happen here.  Analysis can happen in a thread.
 
-	def __init__(self, source=0):
-		self.source = source
+	def __init__(self, source=0, zooInputFile=None, zooImageFileDir = None, outputFileName='results.csv', overwrite=False):
+		self.source = source #which camera to use
+		self.zooInputFile = zooInputFile #classification file
+		self.zooImageFileDir = zooImageFileDir #directory holding all the zooniverse images
+		self.outputFileName = outputFileName
+		self.overwrite = overwrite
 
 		#self.font = '/Users/ageller/VISUALIZATIONS/Adler_fonts/Heroic/Heroic Condensed/HeroicCondensed-Regular.ttf'
 		self.font = '/Users/ageller/VISUALIZATIONS/Adler_fonts/Karla/static/Karla-Regular.ttf'
 		
 		self.categories = ['Craters','Neither','Spiders']
 
-		self.outputFileName = 'results.csv'
 		self.ofile = None #will contain the file object
 
 		#define the width and height to use for the displayed image
@@ -57,7 +62,7 @@ class mainController():
 		self.camFadeLength = 40
 		self.camFadeIter = 0
 		self.fading = False
-		self.blankImage = None #will contain an image to fade out to (defined below)
+		self.blankCamImage = None #will contain an image to fade out to (defined below)
 
 		#define the width and height to use in the detection algorithm (<= width and height set above)
 		self.detectWidth = int(640)
@@ -67,7 +72,7 @@ class mainController():
 		self.buttonImagePath = os.path.join('images','circle.png')
 		self.buttonWidth = int(200)
 		self.buttonHeight = int(200)
-		self.buttonX0 = int(700)
+		self.buttonX0 = int(720)
 		self.buttonY0 = int(800)
 		self.buttonImage = None #will be defined below
 		self.buttonFontSize = 60#80
@@ -89,12 +94,22 @@ class mainController():
 		self.timerImagePath = os.path.join('images','circle.png')
 		self.timerWidth = int(200)
 		self.timerHeight = int(200)
-		self.timerX0 = int(1000)
+		self.timerX0 = int(940)
 		self.timerY0 = int(800)
 		self.timerFontSize = 90#100
 		self.timerImg = None #will be defined below
 
-		self.imageIndex = 0 #this is a dummy index for writing to a file, when working with real images, I will use the proper naming convention
+		#parameters for the subject images
+		self.subjectIndex = 0 #will  iterate through all the available images
+		self.subjectWidth = int(800)
+		self.subjectHeight = int(600)
+		self.subjectX0 = int(1160)
+		self.subjectY0 = int(800)
+		self.subjectImage = None #will hold the subject image
+		self.blankSubjectImage = None #will contain an image to fade out to (defined below)
+
+		#this will hold the zooniverse data from the input file (zooInputFile)
+		self.reader = None 
 
 	def onClick(self, event, x, y, flags, param): 
 		#handle click events in the button window
@@ -173,8 +188,8 @@ class mainController():
 		cv2.imshow('detector', frame)
 		cv2.moveWindow('detector', self.camX0, self.camY0)
 		#create a blank white image to use for fading out
-		self.blankImage = np.zeros(frame.shape,dtype=np.uint8)
-		self.blankImage.fill(255)
+		self.blankCamImage = np.zeros(frame.shape,dtype=np.uint8)
+		self.blankCamImage.fill(255)
 
 	def updateTimerDisplay(self, textX, textY):
 		#update the text in the display and control what happens when timer ends
@@ -197,31 +212,57 @@ class mainController():
 			self.fading = False
 
 		mix = self.camFadeIter/self.camFadeLength
-		return cv2.addWeighted( sharedDict['frame'], 1 - mix, self.blankImage, mix, 0)
+
+		#also fade the subject image
+		cv2.imshow('subject', cv2.addWeighted(self.subjectImage, 1 - mix, self.blankSubjectImage, mix, 0))
+
+		#return the modified frame
+		return cv2.addWeighted( sharedDict['frame'], 1 - mix, self.blankCamImage, mix, 0)
 
 	def initOutputFile(self):
 		#initialize the output file
-		if (os.path.isfile(self.outputFileName)):
-			#if the file exists open to append
-			self.ofile = open(self.outputFileName, 'a')
-		else:
-			#if it's a new file, create it and write the header
+		if (self.overwrite or not os.path.isfile(self.outputFileName)):
+			#create the file and write the header
 			self.ofile = open(self.outputFileName, 'w')
-			header = 'image'
+			header = 'subject_id'
 			for x in self.categories:
 				header += ','+x
 			self.ofile.write(header+'\n')
 			self.ofile.flush()
+		else:
+			#if the file exists and we don't want to overwrite open to append
+			self.ofile = open(self.outputFileName, 'a')
 
 	def outputResults(self):
 		#output the results to a file
 		print("results",sharedDict['people'])
-		line = f'image{self.imageIndex:04}'
+		if (self.reader is not None):
+			line = str(self.reader.classifications['subject_id'][self.subjectIndex])
+		else:
+			line = f'image{self.subjectIndex:04}'
 		for p in sharedDict['people']:
 			line += ','+str(p)
 		self.ofile.write(line+'\n')
 		self.ofile.flush()
-		self.imageIndex += 1 #this should  be moved to a function that grabs the image (and probably want a better naming convention)
+		self.subjectIndex += 1 #this should  be moved to a function that grabs the image (and probably want a better naming convention)
+		if (self.reader is not None):
+			self.subjectIndex = self.subjectIndex % len(self.reader.classifications)
+
+		#also clear out the people array
+		for i, x in enumerate(sharedDict['people']):
+			sharedDict['people'][i] = 0
+
+	def showSubjectImage(self):
+		f = os.path.join(self.zooImageFileDir,self.reader.classifications['image_file'][self.subjectIndex])
+		print(f)
+		if (os.path.isfile(f)):
+			img = cv2.imread(os.path.join(self.zooImageFileDir,self.reader.classifications['image_file'][self.subjectIndex]))
+		else:
+			img = self.blankSubjectImage
+			print('!!!Exception: no image', os.path.join(self.zooImageFileDir,self.reader.classifications['image_file'][self.subjectIndex]))
+		
+		self.subjectImage = cv2.resize(img, (self.subjectWidth, self.subjectHeight))
+		cv2.imshow('subject', self.subjectImage)
 
 	def start(self):
 		#start everything, including the main loop that grabs and displays the camera image
@@ -229,6 +270,15 @@ class mainController():
 		try:
 			#initialize the output file
 			self.initOutputFile()
+
+			#initialize the reader and show the image
+			if (self.zooInputFile is not None):
+				self.reader = zooReader(self.zooInputFile)
+				self.reader.read()
+				self.showSubjectImage()
+				self.blankSubjectImage = np.zeros(self.subjectImage.shape,dtype=np.uint8)
+				self.blankSubjectImage.fill(255)
+				cv2.moveWindow('subject', self.subjectX0, self.subjectY0)
 
 			#set up the camera and define sizes for annotating the image
 			self.initCam()
@@ -287,6 +337,8 @@ class mainController():
 
 				if (self.fading):
 					frame = self.fadeToWhite()
+					if (not self.fading):
+						self.showSubjectImage()
 
 				#print('here', sharedDict['people'])
 				if (frame is not None):
@@ -417,6 +469,7 @@ class peopleDetector():
 
 		except:
 			#print('exception occurred')
+			self.initPeople()
 			pass
 
 
@@ -464,11 +517,70 @@ class timer():
 				self.startTime = time.time() - (self.timerLength - self.timerNow)
 
 
+class zooReader():
+	#see here: https://github.com/zooniverse/Data-digging/blob/master/notebooks_ProcessExports/zoo_processexport_lifevison.ipynb
+	def __init__(self, fname=None):
+
+		self.fname = fname
+		self.tasks = ['init'] #A list of tasks that to pull out within the 'task_values' keys
+
+		#columns expected in the input file (should not be modified)
+		self.columns = ['classification_id', 'user_name', 'user_id', 'user_ip', 
+							'workflow_id','workflow_name', 'workflow_version', 'created_at', 
+							'gold_standard', 'expert', 'metadata', 'annotations', 
+							'subject_data', 'subject_id']
+
+		self.classifications = None #will hold the full data from Zooniverse
+
+	def read(self):
+		self.classifications = pd.read_csv(self.fname, names=self.columns)
+		self.classifications['metadata_json'] = [json.loads(q) for q in self.classifications.metadata]
+		self.classifications['annotations_json'] = [json.loads(q) for q in self.classifications.annotations]
+		self.classifications['subject_data_json'] = [json.loads(q) for q in self.classifications.subject_data]
+
+		self.flattenAnnotations()
+		self.getImageFilenames()
+		#print(self.classifications['task_values'])
+		#print(self.classifications['image_file'])
+
+	def flattenAnnotations(self):
+		#takes the annotations_json and pulls out the desired tasks (from self.tasks)
+		#for each row in self.classifications, there will be a new python dict with keys from self.tasks and values from the associated annotations_json
+
+		taskValues = []
+		for i,row in self.classifications.iterrows():
+			tval = {}
+
+			for x in self.tasks:
+				tval[x] = []
+				val = np.nan
+				for t in row['annotations_json']:
+					if (t['task'] == x):
+						val = t['value'][0]
+				tval[x].append(val)
+			
+			taskValues.append(tval)
+
+		self.classifications['task_values'] = taskValues
+
+	def getImageFilenames(self):
+		#takes the subject_data_json and pulls out the filenames
+
+		names = []
+		for i,row in self.classifications.iterrows():
+			names.append(row['subject_data_json'][str(row['subject_id'])]['filename'])
+
+		self.classifications['image_file'] = names
+
 
 if __name__ == "__main__":
+	f = '/Users/ageller/VISUALIZATIONS/Adler_P4_Zooniverse/testSubjectData/test.csv'
+	d = '/Users/ageller/VISUALIZATIONS/Adler_P4_Zooniverse/testSubjectData/images/renamed'
 
-	c = mainController(1)
+	c = mainController(1,f,d, overwrite=True)
 	c.timerLength = 10
 	c.start()
+
+
 
 
