@@ -519,6 +519,7 @@ class timer():
 
 class zooReader():
 	#see here: https://github.com/zooniverse/Data-digging/blob/master/notebooks_ProcessExports/zoo_processexport_lifevison.ipynb
+	
 	def __init__(self, fname=None):
 
 		self.fname = fname
@@ -526,9 +527,9 @@ class zooReader():
 
 		#columns expected in the input file (should not be modified)
 		self.columns = ['classification_id', 'user_name', 'user_id', 'user_ip', 
-							'workflow_id','workflow_name', 'workflow_version', 'created_at', 
-							'gold_standard', 'expert', 'metadata', 'annotations', 
-							'subject_data', 'subject_id']
+						'workflow_id','workflow_name', 'workflow_version', 'created_at', 
+						'gold_standard', 'expert', 'metadata', 'annotations', 
+						'subject_data', 'subject_id']
 
 		self.classifications = None #will hold the full data from Zooniverse
 
